@@ -1,0 +1,440 @@
+---
+title: "Fluency+: Test/Retest"
+author: "Quentin Coppola"
+date: "2025-08-07"
+output: html_document
+---
+
+
+```{r, echo = F, message=F}
+
+library(pacman)
+p_load(tidyverse, rstan, bayesplot, psych)
+
+knitr::opts_chunk$set(fig.width = 8, fig.height = 8)
+
+# Save directory for Stan outputs
+save_dir <- "/Users/quentin/Desktop/FluencyPLUS/FluencyPlus/ZechunData"
+
+### Raw data for plots ###
+pre <- "/Users/quentin/Desktop/FluencyPLUS/ZechunTrialLevel/post_labeled_data" 
+post <- "/Users/quentin/Desktop/FluencyPLUS/ZechunTrialLevel/pre_labeled_data"
+
+pre_test <- list(
+  FT = read_csv(file.path(pre, "Flanker.csv")),
+  MF = read_csv(file.path(pre, "MFluency.csv")),
+  PA = read_csv(file.path(pre, "Pasat.csv")),
+  RS = read_csv(file.path(pre, "RS.csv")),
+  CS = read_csv(file.path(pre, "Corsi.csv"))
+)
+post_test <- list(
+  FT = read_csv(file.path(post, "Flanker.csv")),
+  MF = read_csv(file.path(post, "MFluency.csv")),
+  PA = read_csv(file.path(post, "Pasat.csv")),
+  RS = read_csv(file.path(post, "RS.csv")),
+  CS = read_csv(file.path(post, "Corsi.csv"))
+)
+
+
+## Replace outliers function
+# mutate(across(everything(), ~ remove_outliers(.x))) %>%
+remove_outliers <- function(x) {
+  m <- mean(x, na.rm = TRUE)
+  sd <- sd(x, na.rm = TRUE)
+  x[abs(x - m) > 3 * sd] <- NA
+  return(x)
+}
+
+```
+
+```{r funcs, echo = F, warning=F, message=F}
+
+plot_scatter_with_stats <- function(df, x_col, y_col, title = "Title", xlabl = "X-axis label", ylabl = "Y-axis label") {
+  # Calculate the Pearson correlation and fit the linear model
+  cor_test <- cor.test(df[[x_col]], df[[y_col]])
+  fit <- lm(df[[y_col]] ~ df[[x_col]])
+  conf_int <- confint(fit)
+
+  # Create the annotation text for correlation and p-value
+  # annotation_text <- paste(
+  #   "r =", round(cor_test$estimate, 2),
+  #   "[", round(conf_int[2, 1], 2), ",", round(conf_int[2, 2], 2), "]",
+  #   "\n", ifelse(cor_test$p.value < 0.0001, "p < 0.0001", paste(" p = ", round(cor_test$p.value, 4)))
+  # )
+  vals <- c(df[[x_col]], df[[y_col]])
+  joint_rng <- range(vals, na.rm = TRUE)
+  brks <- pretty(joint_rng)
+  
+  annotation_text <- paste("r =", round(cor_test$estimate, 2), ifelse(cor_test$p.value < 0.001, "p < 0.001", paste(" p = ", round(cor_test$p.value, 3))))
+  # Create scatter plot with line of best fit, Pearson correlation, p-value, and confidence intervals
+  p <- ggplot(df, aes_string(x = x_col, y = y_col)) +
+    geom_jitter(color = "#cf306c", size = 2, alpha = 0.5) +
+    geom_smooth(method = "lm", color = "#30c1cf", se = FALSE) +
+    # Place geom_label in the top-left corner
+    geom_label(
+      aes(x = -Inf, y = Inf, label = annotation_text),
+      hjust = -0.1, vjust = 1.1,
+      size = 6, color = "black",
+      fill = "white", label.size = 0.5
+    ) +
+    scale_x_continuous(limits = joint_rng, breaks = brks) +
+    scale_y_continuous(limits = joint_rng, breaks = brks) +
+    coord_fixed() + theme_classic() +
+    theme(plot.title = element_text(hjust = 0.5,size = 22, face = "bold"),
+      axis.title = element_text(size = 20, face = "bold"),
+      axis.text = element_text(size = 20),
+      axis.title.x = element_text(size = 20),axis.title.y = element_text(size = 20)) +
+    labs(x = xlabl,
+      y = ylabl,
+      title = title)
+    labs(
+      x = xlabl,
+      y = ylabl,
+      title = title
+    ) 
+
+  # Print the plot
+  print(p)
+}
+
+## Function for Bland-Altman plot ##
+BA.plot <- function(df, m1, m2, title = paste(m1, "&", m2)) {
+  # Extract non-missing values from specified columns
+  m1 <- na.omit(df[[m1]])
+  m2 <- na.omit(df[[m2]])
+  means <- (m1 + m2) / 2
+  diffs <- m1 - m2
+  mdiff <- mean(diffs)
+  sddiff <- sd(diffs)
+  
+  # Perform correlation test
+  cor <- cor.test(diffs, means)
+  # Perform one-sided t-test agains zero for differences
+  t <- t.test(diffs, mu = 0)
+  
+  UL <- mdiff + 1.96 * sddiff
+  LL <- mdiff - 1.96 * sddiff
+  coefR <- 1.96 * sddiff
+  plot_data <- data.frame(means = means, diffs = diffs)
+  
+  annotation_text <- paste0(
+    "Bias = ", round(mdiff, 2), "\n",
+    "CoR = ", round(coefR, 1))
+  
+  # Plot with ggplot2
+  p <- ggplot(plot_data, aes(x = means, y = diffs)) +
+    geom_jitter(width = .5, color = "#30c1cf", size = 2) +
+    geom_hline(yintercept = mdiff, linetype = "dashed", color = "#cf306c") +  # Bias line
+    geom_hline(yintercept = UL, linetype = "dashed", color = "black") +  # Upper limit
+    geom_hline(yintercept = LL, linetype = "dashed", color = "black") + 
+    geom_label(aes(x = -Inf, y = Inf, label = annotation_text),
+      hjust = -0.1, vjust = 1.2,
+      size = 8, color = "black",
+      fill = "white", label.size = 0.75,
+      fontface = "bold") +
+    labs(title = title, x = "Average", y = "Difference") +
+    # scale_x_continuous(breaks = c(min(plot_data$means):max(plot_data$means))) +
+    # scale_y_continuous(breaks = c(min(plot_data$diffs):max(plot_data$diffs))) +
+    theme_classic() + 
+    theme(plot.title = element_text(hjust = 0.5,size = 22, face = "bold"),
+      axis.title = element_text(size = 20, face = "bold"),
+      axis.text = element_text(size = 20),
+      axis.title.x = element_text(size = 20),axis.title.y = element_text(size = 20))
+
+  print(p)
+  print(t)
+  return(cor)
+}
+
+
+## Create cormat plot ##
+createCorPlot <- function(df, tasks = names(df), title = "Title") {
+  plotcor <- t(round(cor(df[tasks], use = "pairwise.complete.obs"),3))
+
+  p <- levelplot(plotcor, col.regions = colorRampPalette(c("#30c1cf", "#FFFCF9", "#cf306c"))(100),
+    at = seq(-1, 1, length.out = 100), scales = list(x = list(rot = 45)),
+    xlab = "Variables", ylab = "Variables", main = title,
+    panel = function(...) {
+      panel.levelplot(...)  
+      panel.text(y = rep(1:nrow(plotcor), each = ncol(plotcor)), x = rep(1:ncol(plotcor), times = nrow(plotcor)),
+        labels = round(plotcor, 2),col = "black", cex = 0.7, font = 1.5)})
+  
+  print(p)
+}
+
+
+```
+
+```{r Flanker, echo = F, message = F, warning = F}
+### Flanker ###
+FT_pre <- pre_test[["FT"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, IsCorrect))
+FT_post <- post_test[["FT"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, IsCorrect))
+
+## comnine pre/post
+both <- rbind(mutate(FT_pre, Session = "Pre"), mutate(FT_post, Session = "Post")) %>% # Combine pre and post data
+  mutate(Session = factor(Session, levels = c("Pre", "Post")),
+         subject_id = as.character(subject_id))
+
+# All trials
+FT_all_ACC <- both %>% 
+  group_by(Session, subject_id) %>%
+  summarise(Accuracy = mean(IsCorrect, na.rm=T)) %>% filter(Accuracy > 0)
+FT_all_RT <- both %>% 
+  filter(IsCorrect == T) %>%
+  group_by(Session, subject_id) %>%
+  summarise(RTmedian = median(ReactionTime, na.rm=T))
+# Incongruent
+FT_inc_ACC <- both %>% 
+  filter(ProblemType == "Incongruent") %>%
+  group_by(Session, subject_id) %>%
+  summarise(Accuracy = mean(IsCorrect, na.rm=T)) %>% filter(Accuracy > 0)
+FT_inc_RT <- both %>% 
+  filter(ProblemType == "Incongruent", IsCorrect == T) %>%
+  group_by(Session, subject_id) %>%
+  summarise(RTmedian = median(ReactionTime, na.rm=T)) 
+# Congruent
+FT_cong_ACC <- both %>% 
+  filter(ProblemType == "Congruent") %>%
+  group_by(Session, subject_id) %>%
+  summarise(Accuracy = mean(IsCorrect, na.rm=T)) %>% filter(Accuracy > 0)
+FT_cong_RT <- both %>% 
+  filter(ProblemType == "Congruent", IsCorrect == T) %>%
+  group_by(Session, subject_id) %>%
+  summarise(RTmedian = median(ReactionTime, na.rm=T)) 
+
+### NIH Score ###
+RTscorer <- function(x){5 - (5* ((log10(max(x,na.rm=T))-log10(median(x,na.rm=T))) / (log10(max(x,na.rm=T))-log10(min(x,na.rm=T)))))}
+
+RTscore <- both %>% filter(IsCorrect == T) %>%
+  group_by(subject_id, Session, ProblemType) %>%
+  summarise(RTscore = RTscorer(ReactionTime)) %>%
+  pivot_wider(names_from = ProblemType, values_from = RTscore, names_prefix = "RTscore_")
+
+FT_NIH <- both %>% 
+  group_by(subject_id, Session) %>%
+  summarise(ACCscore = 5 * mean(IsCorrect, na.rm = T)) %>%
+  full_join(RTscore, by = c("subject_id", "Session")) %>%
+  mutate(NIHscore = RTscore_Incongruent + ACCscore) %>% select(-RTscore_Congruent)
+
+FT <- full_join(FT_all_ACC, FT_all_RT, by = c("subject_id", "Session")) %>%
+  full_join(FT_inc_ACC, by = c("subject_id", "Session")) %>%
+  full_join(FT_inc_RT, by = c("subject_id", "Session")) %>%
+  full_join(FT_cong_ACC, by = c("subject_id", "Session")) %>%
+  full_join(FT_cong_RT, by = c("subject_id", "Session")) %>%
+  full_join(FT_NIH, by = c("subject_id", "Session"))
+ftnames <- c("Session", "subject_id", "FT_all_ACC", "FT_all_RT", "FT_inc_ACC", 
+             "FT_inc_RT", "FT_cong_ACC", "FT_cong_RT", "FT_ACCscore", "FT_RTscore", "FT_NIHscore")
+names(FT) <- ftnames
+
+```
+
+```{r RuleSwitch, echo = F, message = F, warning = F}
+# U know the drill 
+RS_pre <- pre_test[["RS"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, IsCorrect))
+RS_post <- post_test[["RS"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, IsCorrect))
+# Combine pre and post data
+both <- rbind(mutate(RS_pre, Session = "Pre"), mutate(RS_post, Session = "Post")) %>% 
+  mutate(Session = factor(Session, levels = c("Pre", "Post")),
+         IsSwitchTrial = factor(IsSwitchTrial, levels = c(T, F), labels = c("Switch", "Non-switch")),
+         subject_id = as.character(subject_id))
+
+# Homo
+RS_homo_ACC <- both %>% filter(trial_condition == "single") %>%
+  group_by(Session, subject_id) %>%
+  summarise(RS_homo_ACC = mean(IsCorrect, na.rm=T))
+RS_homo_RT <- both %>% filter(trial_condition == "single", IsCorrect==T) %>%
+  group_by(Session, subject_id) %>%
+  summarise(RS_homo_RT = median(ReactionTime, na.rm=T))
+
+# Mixed 
+RS_mixed_ACC <- both %>% filter(trial_condition == "mix") %>%
+  group_by(Session, subject_id) %>%
+  summarise(RS_mixed_ACC = mean(IsCorrect, na.rm=T))
+RS_mixed_RT <- both %>% filter(trial_condition == "mix") %>%
+  group_by(Session, subject_id) %>%
+  summarise(RS_mixed_RT = median(ReactionTime, na.rm=T))
+
+# Mixed (Sw vs Nsw)
+RS_Sw_ACC <- both %>% filter(trial_condition == "mix") %>%
+  group_by(Session, subject_id, IsSwitchTrial) %>%
+  summarise(RS_mixed_ACC = mean(IsCorrect, na.rm=T)) %>%
+  pivot_wider(names_from = "IsSwitchTrial", values_from = "RS_mixed_ACC") %>% 
+  rename(RS_mixedSw_ACC=Switch, RS_mixedNsw_ACC=`Non-switch`)
+RS_Sw_RT <- both %>% filter(trial_condition == "mix") %>%
+  group_by(Session, subject_id, IsSwitchTrial) %>%
+  summarise(RS_mixed_RT = median(ReactionTime, na.rm=T)) %>%
+  pivot_wider(names_from = "IsSwitchTrial", values_from = "RS_mixed_RT") %>% 
+  rename(RS_mixedSw_RT=Switch, RS_mixedNsw_RT=`Non-switch`)
+
+# NIH Score
+RTscore <- both %>% filter(IsCorrect == T) %>%
+  group_by(subject_id, Session, trial_condition) %>%
+  summarise(RS_RTscore = RTscorer(ReactionTime)) %>%
+  pivot_wider(names_from = trial_condition, values_from = RS_RTscore, names_prefix = "RS_RTscore_")
+
+ACCscore <- both %>% 
+  group_by(subject_id, Session, trial_condition) %>%
+  summarise(RS_ACCscore = 5 * mean(IsCorrect, na.rm = T)) %>%
+  pivot_wider(names_from = trial_condition, values_from = RS_ACCscore, names_prefix = "RS_ACCscore_")
+
+RS_NIH <- full_join(RTscore, ACCscore, by = c("subject_id", "Session")) %>%
+  mutate(RS_NIHscore = RS_RTscore_mix + RS_ACCscore_mix,
+         RS_NIHscore_single = RS_RTscore_single + RS_ACCscore_single,
+         RS_SwitchCost = RS_NIHscore_single - RS_NIHscore)
+
+# Combine
+RS <- full_join(RS_homo_ACC, RS_homo_RT, by = c("subject_id", "Session")) %>%
+  full_join(RS_mixed_ACC, by = c("subject_id", "Session")) %>%
+  full_join(RS_mixed_RT, by = c("subject_id", "Session")) %>%
+  full_join(RS_Sw_ACC, by = c("subject_id", "Session")) %>%
+  full_join(RS_Sw_RT, by = c("subject_id", "Session")) %>%
+  full_join(RS_NIH, by = c("subject_id", "Session"))
+
+
+```
+
+```{r mathFluency, echo = F, message = F, warning = F}
+
+both <- rbind(mutate( pre_test[["MF"]] , Session = "Pre"), mutate(post_test[["MF"]], Session = "Post")) %>%
+  mutate(Session = factor(Session, levels = c("Pre", "Post")),
+         subject_id = as.character(subject_id))
+
+# All operations 
+MF_ops <- both %>% 
+  group_by(subject_id, Session, Operation) %>%
+  summarise(Accuracy = mean(CorrectlyAnswered, na.rm = T),
+            N_trial = n(),
+            .groups = "drop") %>%
+  pivot_wider(names_from = Operation, values_from = c("Accuracy", "N_trial"), names_prefix = "MF_")
+names(MF_ops) <- c("subject_id","Session","MF_add_ACC", "MF_sub_ACC", "MF_div_ACC", "MF_multi_ACC",
+                   "MF_add_Ntrial","MF_sub_Ntrial", "MF_div_Ntrial", "MF_multi_Ntrial")
+# Collapsed
+MF_all <- both %>% 
+  group_by(subject_id, Session) %>%
+  summarise(MF_all_ACC = mean(CorrectlyAnswered, na.rm = T),
+            MF_all_Ntrial = n(),
+            .groups = "drop") 
+# Combine
+MF <- full_join(MF_ops, MF_all, by = c("subject_id", "Session"))
+
+```
+
+```{r PASAT, echo = F, message = F, warning = F}
+
+PA_pre <- pre_test[["PA"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, CorrectlyAnswered))
+PA_post <- post_test[["PA"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, CorrectlyAnswered))
+
+## Look at box plots of accuracy
+both <- rbind(mutate(PA_pre, Session = "Pre"), mutate(PA_post, Session = "Post")) %>% # Combine pre and post data
+  mutate(Session = factor(Session, levels = c("Pre", "Post")),
+         subject_id = as.character(subject_id))
+
+# Accuracy
+PA_ACC <- both %>%
+  group_by(Session, subject_id) %>%
+  summarise(PA_ACC = mean(IsCorrect, na.rm=T))
+
+# NIH Score
+RTscore <- both %>% filter(IsCorrect == T) %>%
+  group_by(subject_id, Session) %>%
+  summarise(PA_RTscore = RTscorer(ReactionTime))
+
+PA_NIH <- both %>% 
+  group_by(subject_id, Session) %>%
+  summarise(PA_ACCscore = 5 * mean(IsCorrect, na.rm = T)) %>%
+  full_join(RTscore, by = c("subject_id", "Session")) %>%
+  mutate(PA_NIHscore = PA_RTscore + PA_ACCscore)
+
+PA <- full_join(PA_ACC, PA_NIH, by = c("subject_id", "Session"))
+
+```
+
+```{r Corsi, echo = F, message = F, warning = F}
+
+both <- rbind(mutate(pre_test[["CS"]] , Session = "Pre"), mutate(post_test[["CS"]], Session = "Post")) %>% # Combine pre and post data
+  mutate(Session = factor(Session, levels = c("Pre", "Post")),
+         subject_id = as.character(subject_id))
+
+CB <- both %>%
+  group_by(subject_id, Session) %>%
+  summarise(CB_ACC = mean(PerfectAnswer, na.rm = TRUE),
+            CB_Span = max(nchar(TargetSequence), na.rm=T))
+
+```
+
+```{r combine, echo = F, message=F, warning=F}
+
+combo <- full_join(FT, RS, by = c("subject_id", "Session")) %>%
+  full_join(MF, by = c("subject_id", "Session")) %>%
+  full_join(PA, by = c("subject_id", "Session")) %>%
+  full_join(CB, by = c("subject_id", "Session")) %>%
+  pivot_wider(names_from = "Session", values_from = c(3:42))
+
+```
+
+```{r plots, echo = F, message=F, warning=F}
+# Flanker
+plot_scatter_with_stats(combo, "FT_all_ACC_Pre", "FT_all_ACC_Post", title = "Flanker: Accuracy (all trials)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_all_RT_Pre", "FT_all_RT_Post", title = "Flanker: RT Median (all trials)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_inc_ACC_Pre", "FT_inc_ACC_Post", title = "Flanker: Accuracy (incongruent)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_inc_RT_Pre", "FT_inc_RT_Post", title = "Flanker: RT Median (incongruent)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_cong_ACC_Pre", "FT_cong_ACC_Post", title = "Flanker: Accuracy (congruent)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_cong_RT_Pre", "FT_cong_RT_Post", title = "Flanker: RT Median (congruent)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_ACCscore_Pre", "FT_ACCscore_Post", title = "Flanker: NIH Score (Accuracy)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_RTscore_Pre", "FT_RTscore_Post", title = "Flanker: NIH Score (RT)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "FT_NIHscore_Pre", "FT_NIHscore_Post", title = "Flanker: NIH Score (Total)", xlabl = "T1", ylabl = "T2")
+
+# Rule Switch
+plot_scatter_with_stats(combo, "RS_homo_ACC_Pre", "RS_homo_ACC_Post", title = "Rule Switch: Accuracy (single)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_homo_RT_Pre", "RS_homo_RT_Post", title = "Rule Switch: RT Median (single)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_mixed_ACC_Pre", "RS_mixed_ACC_Post", title = "Rule Switch: Accuracy (mixed)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_mixed_RT_Pre", "RS_mixed_RT_Post", title = "Rule Switch: RT Median (mixed)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_mixedSw_ACC_Pre", "RS_mixedSw_ACC_Post", title = "Rule Switch: Accuracy (switch)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_mixedSw_RT_Pre", "RS_mixedSw_RT_Post", title = "Rule Switch: RT Median (switch)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_mixedNsw_ACC_Pre", "RS_mixedNsw_ACC_Post", title = "Rule Switch: Accuracy (non-switch)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_mixedNsw_RT_Pre", "RS_mixedNsw_RT_Post", title = "Rule Switch: RT Median (non-switch)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_ACCscore_single_Pre", "RS_ACCscore_single_Post", title = "Rule Switch: NIH Score (Accuracy - single)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_RTscore_single_Pre", "RS_RTscore_single_Post", title = "Rule Switch: NIH Score (RT - single)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_NIHscore_single_Pre", "RS_NIHscore_single_Post", title = "Rule Switch: NIH Score (Total - single)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_ACCscore_mix_Pre", "RS_ACCscore_mix_Post", title = "Rule Switch: NIH Score (Accuracy - mixed)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_RTscore_mix_Pre", "RS_RTscore_mix_Post", title = "Rule Switch: NIH Score (RT - mixed)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_NIHscore_Pre", "RS_NIHscore_Post", title = "Rule Switch: NIH Score (Total - mixed)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "RS_SwitchCost_Pre", "RS_SwitchCost_Post", title = "Rule Switch: Switch Cost", xlabl = "T1", ylabl = "T2")
+# Math Fluency
+## By operation ##
+plot_scatter_with_stats(combo, "MF_add_ACC_Pre", "MF_add_ACC_Post", title = "Math Fluency: Accuracy (addition)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_add_Ntrial_Pre", "MF_add_Ntrial_Post", title = "Math Fluency: N-trials (addition)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_sub_ACC_Pre", "MF_sub_ACC_Post", title = "Math Fluency: Accuracy (subtraction)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_sub_Ntrial_Pre", "MF_sub_Ntrial_Post", title = "Math Fluency: N-trials (subtraction)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_multi_ACC_Pre", "MF_multi_ACC_Post", title = "Math Fluency: Accuracy (multiplication)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_multi_Ntrial_Pre", "MF_multi_Ntrial_Post", title = "Math Fluency: N-trials (multiplication)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_div_ACC_Pre", "MF_div_ACC_Post", title = "Math Fluency: Accuracy (division)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_div_Ntrial_Pre", "MF_div_Ntrial_Post", title = "Math Fluency: N-trials (division)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_all_ACC_Pre", "MF_all_ACC_Post", title = "Math Fluency: Accuracy (collapsed)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "MF_all_Ntrial_Pre", "MF_all_Ntrial_Post", title = "Math Fluency: N-trials (collapsed)", xlabl = "T1", ylabl = "T2")
+# PASAT
+plot_scatter_with_stats(combo, "PA_ACC_Pre", "PA_ACC_Post", title = "PASAT: Accuracy", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "PA_ACCscore_Pre", "PA_ACCscore_Post", title = "PASAT: NIH score (accuracy)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "PA_RTscore_Pre", "PA_RTscore_Post", title = "PASAT: NIH score (RT)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "PA_ACCscore_Pre", "PA_ACCscore_Post", title = "PASAT: NIH score (Accuracy)", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "PA_NIHscore_Pre", "PA_NIHscore_Post", title = "PASAT: NIH score (Total)", xlabl = "T1", ylabl = "T2")
+# Corsi
+plot_scatter_with_stats(combo, "CB_ACC_Pre", "CB_ACC_Post", title = "Corsi: Accuracy", xlabl = "T1", ylabl = "T2")
+plot_scatter_with_stats(combo, "CB_Span_Pre", "CB_Span_Post", title = "Corsi: Span", xlabl = "T1", ylabl = "T2")
+
+
+```
+
+
