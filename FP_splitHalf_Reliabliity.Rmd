@@ -1,0 +1,885 @@
+---
+title: "Fluency+: Split Half Reliablity"
+author: "Quentin Coppola"
+date: "2025-08-06"
+output: html_document
+---
+
+## *Split-half reliability was caclulated by taking every other trial and taking the correlation (within-session)*
+
+```{r, echo = F, message=F}
+
+library(pacman)
+p_load(tidyverse, rstan, bayesplot, psych)
+
+knitr::opts_chunk$set(fig.width = 9, fig.height = 9)
+
+# Save directory for Stan outputs
+save_dir <- "/Users/quentin/Desktop/FluencyPLUS/FluencyPlus/ZechunData"
+
+### Raw data for plots ###
+pre <- "/Users/quentin/Desktop/FluencyPLUS/ZechunTrialLevel/post_labeled_data" 
+post <- "/Users/quentin/Desktop/FluencyPLUS/ZechunTrialLevel/pre_labeled_data"
+
+pre_test <- list(
+  FT = read_csv(file.path(pre, "Flanker.csv")),
+  MF = read_csv(file.path(pre, "MFluency.csv")),
+  PA = read_csv(file.path(pre, "Pasat.csv")),
+  RS = read_csv(file.path(pre, "RS.csv")),
+  CS = read_csv(file.path(pre, "Corsi.csv"))
+)
+post_test <- list(
+  FT = read_csv(file.path(post, "Flanker.csv")),
+  MF = read_csv(file.path(post, "MFluency.csv")),
+  PA = read_csv(file.path(post, "Pasat.csv")),
+  RS = read_csv(file.path(post, "RS.csv")),
+  CS = read_csv(file.path(post, "Corsi.csv"))
+)
+
+
+## Replace outliers function (didn't use this)
+# mutate(across(everything(), ~ remove_outliers(.x))) %>%
+remove_outliers <- function(x) {
+  m <- mean(x, na.rm = TRUE)
+  sd <- sd(x, na.rm = TRUE)
+  x[abs(x - m) > 3 * sd] <- NA
+  return(x)
+}
+
+```
+
+```{r funcs, echo = F}
+### Even/Odd split functinon 
+### make sure that when you run this function, subject_column AND data_column are character strings (with quote marks)
+calc_evenOdd_half<- function(data, subject_column, data_column) {
+  # create function to genenrate true/false alternating
+  generate_alternating_vector <- function(n) {
+  alternating_vector <- rep(FALSE, n)
+  alternating_vector[seq(1, n, by = 2)] <- TRUE
+  return(alternating_vector)
+}
+# Generate alternating vector for each participant
+alternating_vectors <- lapply(split(data, data[[subject_column]]), function(x) {
+  generate_alternating_vector(nrow(x)) # create a vector of alternating true vs falses for trials in each subject
+})
+  
+  # add this indexing to a new dataframe
+  df <- data.frame(SubjectID = data[[subject_column]],
+                   RT = data[[data_column]],
+                   ind = unlist(alternating_vectors))
+  
+#   return(df)    # uncom to check that data is being filtered properly before summarise()
+# }
+  # get the first half of means
+  firstHalfMeans <- df %>% filter(ind == FALSE) %>% group_by(SubjectID) %>% summarise(EvenMean = median(RT, na.rm = TRUE),
+                                                                                      EvenVar = var(RT, na.rm = TRUE),
+                                                                                      n = n())
+  secondHalfMeans <- df %>% filter(ind == TRUE) %>% group_by(SubjectID) %>% summarise(OddMean = median(RT, na.rm = TRUE),
+                                                                                      OddVar = var(RT, na.rm = TRUE),
+                                                                                      n = n())
+  means <- full_join(firstHalfMeans, secondHalfMeans, by = "SubjectID")
+  return(means)
+}
+
+### Calculate RT/ACC correlations
+means_cor <- function(data) {
+  # Extract columns for correlations
+  pairs <- list(c(2, 5), c(8,11))
+  # Calculate correlations for each pair 
+  correlations <- lapply(pairs, function(pair) {
+    cor(data[[pair[1]]], data[[pair[2]]], use = "pairwise.complete.obs")
+  })
+   # Set names for the list
+  names(correlations) <- c("RTmedian", "Accuracy")
+  cor <- as.data.frame(correlations)
+  # Return the correlations
+  return(cor)
+}
+
+```
+
+```{r Flanker, echo = F, warning = F, message=F}
+
+FT_pre <- pre_test[["FT"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, IsCorrect))
+FT_post <- post_test[["FT"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 150 | ReactionTime > 5000 , NA, IsCorrect))
+
+## comnine pre/post
+both <- rbind(mutate(FT_pre, Session = "Pre"), mutate(FT_post, Session = "Post")) %>% # Combine pre and post data
+  mutate(Session = factor(Session, levels = c("Pre", "Post")))
+
+### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###
+### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###
+### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###### Collapsed ###
+
+# Pre
+FTpre_all_RT <- FT_pre %>%
+  filter(IsCorrect == T) %>%
+  summarise(FTpre_all_RT_EoH = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+FTpre_all_ACC <- FT_pre %>%
+  summarise(FTpre_all_ACC_EoH = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+FTpre_all <- full_join(FTpre_all_RT, FTpre_all_ACC, by = "SubjectID")
+FTpre_all_EoH <- means_cor(FTpre_all)
+
+# Post
+FTpost_all_RT <- FT_post %>%
+  filter(IsCorrect == T) %>%
+  summarise(FTpost_all_RT_EoH = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+FTpost_all_ACC <- FT_post %>%
+  summarise(FTpost_all_ACC_EoH = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+FTpost_all <- full_join(FTpost_all_RT, FTpost_all_ACC, by = "SubjectID")
+FTpost_all_EoH <- means_cor(FTpost_all)
+
+### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###
+### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###
+### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###### Incong vs Cong ###
+
+# Pre
+FTpre_cong_RT <- FT_pre %>%
+  filter(ProblemType == "Congruent",
+         IsCorrect == T) %>%
+  summarise(FTpre_cong_RT_EoH = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+FTpre_cong_ACC <- FT_pre %>%
+  filter(ProblemType == "Congruent") %>%
+  summarise(FTpre_cong_ACC_EoH = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+FTpre_cong <- full_join(FTpre_cong_RT, FTpre_cong_ACC, by = "SubjectID")
+FTpre_cong_EoH <- means_cor(FTpre_cong)
+
+
+FTpre_incong_RT <- FT_pre %>%
+  filter(ProblemType == "Incongruent",
+         IsCorrect == T) %>%
+  summarise(FTpre_incong_RT_EoH = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+FTpre_incong_ACC <- FT_pre %>%
+  filter(ProblemType == "Incongruent") %>%
+  summarise(FTpre_incong_ACC_EoH = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+FTpre_incong <- full_join(FTpre_incong_RT, FTpre_incong_ACC, by = "SubjectID")
+FTpre_incong_EoH <- means_cor(FTpre_incong)
+
+# Post
+FTpost_cong_RT <- FT_post %>%
+  filter(ProblemType == "Congruent",
+         IsCorrect == T) %>%
+  summarise(FTpost_cong_RT_EoH = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+FTpost_cong_ACC <- FT_post %>%
+  filter(ProblemType == "Congruent") %>%
+  summarise(FTpost_cong_ACC_EoH = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+FTpost_cong <- full_join(FTpost_cong_RT, FTpost_cong_ACC, by = "SubjectID")
+FTpost_cong_EoH <- means_cor(FTpost_cong)
+
+
+FTpost_incong_RT <- FT_post %>%
+  filter(ProblemType == "Incongruent",
+         IsCorrect == T) %>%
+  summarise(FTpost_incong_RT_EoH = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+FTpost_incong_ACC <- FT_post %>%
+  filter(ProblemType == "Incongruent") %>%
+  summarise(FTpost_incong_ACC_EoH = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+FTpost_incong <- full_join(FTpost_incong_RT, FTpost_incong_ACC, by = "SubjectID")
+FTpost_incong_EoH <- means_cor(FTpost_incong)
+
+### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ###
+### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ###
+### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ### NIH Score ###
+RTscorer <- function(x){5 - (5* ((log10(max(x,na.rm=T))-log10(median(x,na.rm=T))) / (log10(max(x,na.rm=T))-log10(min(x,na.rm=T)))))}
+
+# Create index
+indexRT <- both %>% filter(IsCorrect == T, ProblemType == "Incongruent") %>% 
+  group_by(subject_id) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_RT <- both %>% filter(IsCorrect == T, ProblemType == "Incongruent") %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexRT) %>%
+  summarise(evenMeans = RTscorer(ReactionTime)) 
+# odd scores
+oddMeans_RT <- both %>% filter(IsCorrect == T, ProblemType == "Incongruent") %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexRT) %>%
+  summarise(oddMeans = RTscorer(ReactionTime)) 
+
+FT_nihRT <- full_join(evenMeans_RT, oddMeans_RT, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(NIH_RT = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+# Create index
+indexACC <- both %>%
+  group_by(subject_id) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = 5 * mean(IsCorrect, na.rm = T)) 
+# odd scores
+oddMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = 5 * mean(IsCorrect, na.rm = T)) 
+
+FT_nihACC <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(NIH_ACC = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+## Full NIH Score
+FT_nihALL <- full_join(evenMeans_RT, oddMeans_RT, by = c("subject_id", "Session")) %>%
+  full_join(evenMeans_ACC, by = c("subject_id", "Session")) %>%
+  full_join(oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  mutate(evenMeans = evenMeans.x + evenMeans.y,
+            oddMeans = oddMeans.x + oddMeans.y,
+            .keep = c("unused")) %>%
+  group_by(Session) %>%
+  summarise(NIH_ALL = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+  
+
+## Combine ##
+FT_EoH <- rbind(
+  rbind(mutate(FTpre_all_EoH, Condition = "FT_all"), mutate(FTpre_cong_EoH, Condition = "FT_congruent")) %>%
+  rbind(mutate(FTpre_incong_EoH, Condition = "FT_incongruent")) %>% mutate(Session = "Pre"),
+  rbind(mutate(FTpost_all_EoH, Condition = "FT_all"), mutate(FTpost_cong_EoH, Condition = "FT_congruent")) %>%
+  rbind(mutate(FTpost_incong_EoH, Condition = "FT_incongruent")) %>% mutate(Session = "Post")
+) %>% pivot_longer(cols=-c(Condition, Session), names_to = "Measure", values_to = "Correlation")
+
+FTnih_EoH <- full_join(FT_nihRT, FT_nihACC, by = "Session") %>%
+  full_join(FT_nihALL, by = "Session") %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation") %>%
+  mutate(Condition = "FT_NIH") %>% select(Condition,Session,Measure,Correlation)
+
+Flanker_EoH <- rbind(FT_EoH, FTnih_EoH)
+
+
+```
+
+```{R ruleSwitch, echo = F, warning = F, message=F}
+# U know the drill 
+RS_pre <- pre_test[["RS"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, IsCorrect))
+RS_post <- post_test[["RS"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 200 | ReactionTime > 15000 , NA, IsCorrect))
+
+# Combine pre and post data
+both <- rbind(mutate(RS_pre, Session = "Pre"), mutate(RS_post, Session = "Post")) %>% 
+  mutate(Session = factor(Session, levels = c("Pre", "Post")))
+
+### Single ###### Single ###### Single ###### Single ###### Single ###### Single ###### Single ###
+### Single ###### Single ###### Single ###### Single ###### Single ###### Single ###### Single ###
+### Single ###### Single ###### Single ###### Single ###### Single ###### Single ###### Single ###
+# Pre
+RSpre_sgl_RT <- RS_pre %>%filter(trial_condition=="single", IsCorrect == T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpre_sgl_ACC <- RS_pre %>% filter(trial_condition=="single") %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpre_sgl <- full_join(RSpre_sgl_RT, RSpre_sgl_ACC, by = "SubjectID") 
+RSpre_sgl_EoH <- means_cor(RSpre_sgl)
+
+# Post
+RSpost_sgl_RT <- RS_post %>% filter(trial_condition=="single", IsCorrect == T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpost_sgl_ACC <- RS_post %>% filter(trial_condition=="single") %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpost_sgl <- full_join(RSpost_sgl_RT, RSpost_sgl_ACC, by = "SubjectID") 
+RSpost_sgl_EoH <- means_cor(RSpost_sgl)
+
+# Combine
+RS_single <- rbind(mutate(RSpre_sgl_EoH, Session = "Pre"), mutate(RSpost_sgl_EoH, Session = "Post")) %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation") %>%  
+  mutate(Condition = "RS_Single")
+
+### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###
+### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###
+### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###
+
+# Pre
+RSpre_mix_RT <- RS_pre %>%
+  filter(trial_condition=="mix", IsCorrect == T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpre_mix_ACC <- RS_pre %>% filter(trial_condition=="mix") %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpre_mix <- full_join(RSpre_mix_RT, RSpre_mix_ACC, by = "SubjectID") 
+RSpre_mix_EoH <- means_cor(RSpre_mix)
+
+# Post
+RSpost_mix_RT <- RS_post %>%
+  filter(trial_condition=="mix", IsCorrect == T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpost_mix_ACC <- RS_post %>% filter(trial_condition=="mix") %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpost_mix <- full_join(RSpost_mix_RT, RSpost_mix_ACC, by = "SubjectID") 
+RSpost_mix_EoH <- means_cor(RSpost_mix)
+
+# Combine
+RS_mix <- rbind(mutate(RSpre_mix_EoH, Session = "Pre"), mutate(RSpost_mix_EoH, Session = "Post")) %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation") %>%  
+  mutate(Condition = "RS_Mixed")
+
+### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###
+### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###
+### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###### Mixed Switch ###
+
+# Pre
+RSpre_mixSw_RT <- RS_pre %>%
+  filter(trial_condition=="mix", IsCorrect == T, IsSwitchTrial==T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpre_mixSw_ACC <- RS_pre %>% filter(trial_condition=="mix", IsSwitchTrial==T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpre_mixSw <- full_join(RSpre_mixSw_RT, RSpre_mixSw_ACC, by = "SubjectID") 
+RSpre_mixSw_EoH <- means_cor(RSpre_mixSw)
+
+# Post
+RSpost_mixSw_RT <- RS_post %>%
+  filter(trial_condition=="mix", IsCorrect == T, IsSwitchTrial==T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpost_mixSw_ACC <- RS_post %>% filter(trial_condition=="mix", IsSwitchTrial==T) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpost_mixSw <- full_join(RSpost_mixSw_RT, RSpost_mixSw_ACC, by = "SubjectID") 
+RSpost_mixSw_EoH <- means_cor(RSpost_mixSw)
+
+# Combine
+RS_mixSw <- rbind(mutate(RSpre_mixSw_EoH, Session = "Pre"), mutate(RSpost_mixSw_EoH, Session = "Post")) %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation") %>%  
+  mutate(Condition = "RS_Mixed_Switch")
+
+### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###
+### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###
+### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###### Mixed Non-Switch ###
+
+# Pre
+RSpre_mixNsw_RT <- RS_pre %>%
+  filter(trial_condition=="mix", IsCorrect == T, IsSwitchTrial==F) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpre_mixNsw_ACC <- RS_pre %>% filter(trial_condition=="mix", IsSwitchTrial==F) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpre_mixNsw <- full_join(RSpre_mixNsw_RT, RSpre_mixNsw_ACC, by = "SubjectID") 
+RSpre_mixNsw_EoH <- means_cor(RSpre_mixNsw)
+
+# Post
+RSpost_mixNsw_RT <- RS_post %>%
+  filter(trial_condition=="mix", IsCorrect == T, IsSwitchTrial==F) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "ReactionTime")) %>%
+ unnest() 
+RSpost_mixNsw_ACC <- RS_post %>% filter(trial_condition=="mix", IsSwitchTrial==F) %>% 
+  summarise(RS = calc_evenOdd_half(., "subject_id", "IsCorrect")) %>%
+ unnest() 
+## Calculate Even/Odd reliability
+RSpost_mixNsw <- full_join(RSpost_mixNsw_RT, RSpost_mixNsw_ACC, by = "SubjectID") 
+RSpost_mixNsw_EoH <- means_cor(RSpost_mixNsw)
+
+# Combine
+RS_mixNsw <- rbind(mutate(RSpre_mixNsw_EoH, Session = "Pre"), mutate(RSpost_mixNsw_EoH, Session = "Post")) %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation") %>%  
+  mutate(Condition = "RS_Mixed_NoSwitch")
+
+### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###
+### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###
+### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###
+
+### Single Trials ###### Single Trials ###### Single Trials ###### Single Trials ###### Single Trials ###### Single Trials ###
+
+# Create index
+indexACC <- both %>% filter(trial_condition == "single") %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_ACC <- both %>% filter(trial_condition == "single") %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = 5 * mean(IsCorrect, na.rm = T)) 
+# odd scores
+oddMeans_ACC <- both %>% filter(trial_condition == "single") %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = 5 * mean(IsCorrect, na.rm = T)) 
+
+RS_nihACC_single <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(ACC_single = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+# Create index
+indexRT <- both %>% filter(IsCorrect == T, trial_condition == "single") %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_RT <- both %>% filter(IsCorrect == T, trial_condition == "single") %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexRT) %>%
+  summarise(evenMeans = RTscorer(ReactionTime)) 
+# odd scores
+oddMeans_RT <- both %>% filter(IsCorrect == T, trial_condition == "single")%>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexRT) %>%
+  summarise(oddMeans = RTscorer(ReactionTime)) 
+
+RS_nihRT_single <- full_join(evenMeans_RT, oddMeans_RT, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(RT_single = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+## Do total NIH score reliability
+RS_nihALL_single <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  full_join(evenMeans_RT, by = c("subject_id", "Session")) %>%
+  full_join(oddMeans_RT, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(evenScore = evenMeans.x + evenMeans.y,
+            oddScore = oddMeans.x + oddMeans.y) %>%
+  group_by(Session) %>%
+  summarise(TOTAL_single = cor(evenScore, oddScore, use = "pairwise.complete.obs"))
+
+### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###### Mixed ###
+
+# Create index
+indexACC <- both %>% filter(trial_condition == "mix") %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_ACC <- both %>% filter(trial_condition == "mix") %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = 5 * mean(IsCorrect, na.rm = T)) 
+# odd scores
+oddMeans_ACC <- both %>% filter(trial_condition == "mix")%>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = 5 * mean(IsCorrect, na.rm = T)) 
+
+RS_nihACC_mixed <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(ACC_Mixed = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+# Create index
+indexRT <- both %>% filter(IsCorrect == T, trial_condition == "mix") %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_RT <- both %>% filter(IsCorrect == T, trial_condition == "mix") %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexRT) %>%
+  summarise(evenMeans = RTscorer(ReactionTime)) 
+# odd scores
+oddMeans_RT <- both %>% filter(IsCorrect == T, trial_condition == "mix")%>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexRT) %>%
+  summarise(oddMeans = RTscorer(ReactionTime)) 
+
+RS_nihRT_mixed <- full_join(evenMeans_RT, oddMeans_RT, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(RT_Mixed = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+## Do total NIH score reliability
+RS_nihALL_mixed <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  full_join(evenMeans_RT, by = c("subject_id", "Session")) %>%
+  full_join(oddMeans_RT, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(evenScore = evenMeans.x + evenMeans.y,
+            oddScore = oddMeans.x + oddMeans.y) %>%
+  group_by(Session) %>%
+  summarise(TOTAL_Mixed = cor(evenScore, oddScore, use = "pairwise.complete.obs"))
+
+
+#### COMBINE RULE SWITCH ####
+RS_EoH <- rbind(RS_single, RS_mix, RS_mixNsw, RS_mixSw)
+  
+#### COMBINE THE NIH SCORES ####
+RS_nihRT <- full_join(RS_nihRT_single, RS_nihRT_mixed, by = "Session") %>%
+  pivot_longer(cols=-Session, names_to = "NIH", values_to = "Correlation")
+RS_nihACC <- full_join(RS_nihACC_single, RS_nihACC_mixed, by = "Session") %>%
+  pivot_longer(cols=-Session, names_to = "NIH", values_to = "Correlation")
+RS_nihTOTAL <- full_join(RS_nihALL_single, RS_nihALL_mixed, by = "Session") %>%
+  pivot_longer(cols=-Session, names_to = "NIH", values_to = "Correlation")
+
+RS_NIH_EoH <- rbind(RS_nihRT, RS_nihACC, RS_nihTOTAL) %>% 
+  separate(col = NIH, into = c("Measure", "Condition"), sep = "_", remove = FALSE) %>% 
+  mutate(Measure = paste0("NIH_",Measure),
+         Condition = paste0("NIH_",Condition)) %>% select(Session, Measure, Condition, Correlation)
+
+RuleSwitch_EoH <- rbind(RS_EoH,RS_NIH_EoH)
+
+
+```
+
+```{r mathFluency, echo = F, warning = F, message=F}
+
+both <- rbind(mutate(pre_test[["MF"]] , Session = "Pre"), mutate(post_test[["MF"]], Session = "Post")) %>%
+  mutate(Session = factor(Session, levels = c("Pre", "Post")))
+
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+
+# Create index
+indexACC <- both %>% 
+  group_by(subject_id) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = mean(CorrectlyAnswered, na.rm = T)) 
+# odd scores
+oddMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = mean(CorrectlyAnswered, na.rm = T)) 
+
+MF_ACC_EoH <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(ACC = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###
+### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###
+### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###### N-trials ###
+
+# Create index
+indexN <- both %>% 
+  group_by(subject_id) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_N <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = n() * mean(CorrectlyAnswered, na.rm = T)) 
+# odd scores
+oddMeans_N <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = n() * mean(CorrectlyAnswered, na.rm = T)) 
+
+MF_N_EoH <- full_join(evenMeans_N, oddMeans_N, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(Ntrials = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+MathFluency_EoH <- full_join(MF_ACC_EoH, MF_N_EoH, by = "Session") %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation")
+
+```
+
+```{r PASAT, echo = F, warning = F, message=F}
+
+PA_pre <- pre_test[["PA"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, CorrectlyAnswered))
+PA_post <- post_test[["PA"]] %>%
+  mutate(ReactionTime = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, ReactionTime),
+         IsCorrect = ifelse(ReactionTime < 500 | ReactionTime > 60000 , NA, CorrectlyAnswered))
+
+## Look at box plots of accuracy
+both <- rbind(mutate(PA_pre, Session = "Pre"), mutate(PA_post, Session = "Post")) %>% # Combine pre and post data
+  mutate(Session = factor(Session, levels = c("Pre", "Post")))
+
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+
+# Create index
+indexACC <- both %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = mean(CorrectlyAnswered, na.rm = T)) 
+# odd scores
+oddMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = mean(CorrectlyAnswered, na.rm = T)) 
+
+PA_ACC <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(Correlation = cor(evenMeans, oddMeans, use = "pairwise.complete.obs")) %>%
+  mutate(Measure= "Accuracy") %>% select(Session, Measure, Correlation)
+
+### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###
+### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###
+### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###### NIH Score ###
+
+# Create index
+indexACC <- both %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = 5 * mean(CorrectlyAnswered, na.rm = T)) 
+# odd scores
+oddMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = 5 * mean(CorrectlyAnswered, na.rm = T)) 
+
+PA_nihACC <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(NIH_ACC = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+# Create index
+indexRT <- both %>% filter(CorrectlyAnswered == T) %>% 
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_RT <- both %>% filter(CorrectlyAnswered == T) %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexRT) %>%
+  summarise(evenMeans = RTscorer(ReactionTime)) 
+# odd scores
+oddMeans_RT <- both %>% filter(CorrectlyAnswered == T)%>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexRT) %>%
+  summarise(oddMeans = RTscorer(ReactionTime)) 
+
+PA_nihRT <- full_join(evenMeans_RT, oddMeans_RT, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(NIH_RT = cor(evenMeans, oddMeans, use = "pairwise.complete.obs"))
+
+PA_nihTOTAL <- full_join(evenMeans_RT, oddMeans_RT, by = c("subject_id", "Session")) %>%
+  full_join(evenMeans_ACC, by = c("subject_id", "Session")) %>%
+  full_join(oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(evenScore = evenMeans.x + evenMeans.y,
+            oddScore = oddMeans.x + oddMeans.y) %>%
+  group_by(Session) %>%
+  summarise(NIH_TOTAL = cor(evenScore, oddScore, use = "pairwise.complete.obs"))
+  
+PA_NIH <- full_join(PA_nihACC, PA_nihRT, by = "Session") %>%
+  full_join(PA_nihTOTAL, by = "Session") %>%
+  pivot_longer(cols=-Session, names_to = "Measure", values_to = "Correlation")
+
+## Combine
+PASAT_EoH <- rbind(PA_NIH, PA_ACC)
+
+```
+
+```{r Corsi, echo = F, warning = F, message=F}
+
+both <- rbind(mutate(pre_test[["CS"]] , Session = "Pre"), mutate(post_test[["CS"]], Session = "Post")) %>% 
+  mutate(Session = factor(Session, levels = c("Pre", "Post")))
+
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###### Accuracy ###
+
+# Create index
+indexACC <- both %>%
+  group_by(subject_id, Session) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+
+# even scores
+evenMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexACC) %>%
+  summarise(evenMeans = mean(PerfectAnswer, na.rm = T))
+
+# odd scores
+oddMeans_ACC <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexACC) %>%
+  summarise(oddMeans = mean(PerfectAnswer, na.rm = T)) 
+
+CB_ACC <- full_join(evenMeans_ACC, oddMeans_ACC, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(Correlation = cor(evenMeans, oddMeans, use = "pairwise.complete.obs")) %>%
+  mutate(Measure= "Accuracy") %>% select(Session, Measure, Correlation)
+
+### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###
+### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###
+### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###### Span ###
+
+# Create index
+indexSPAN <- both %>% 
+  group_by(subject_id) %>% mutate(row_index = row_number()) %>%
+  filter(row_index %% 2 == 0) %>% pull(row_index)
+# even scores
+evenMeans_SPAN <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(row_number() %in% indexSPAN) %>%
+  summarise(evenMeans = n() * mean(PerfectAnswer, na.rm = T)) 
+# odd scores
+oddMeans_SPAN <- both %>% 
+  group_by(subject_id, Session) %>%
+  filter(!row_number() %in% indexSPAN) %>%
+  summarise(oddMeans = n() *  mean(PerfectAnswer, na.rm = T)) 
+
+CB_SPAN <- full_join(evenMeans_SPAN, oddMeans_SPAN, by = c("subject_id", "Session")) %>%
+  group_by(Session) %>%
+  summarise(Correlation = cor(evenMeans, oddMeans, use = "pairwise.complete.obs")) %>%
+  mutate(Measure= "Span") %>% select(Session, Measure, Correlation)
+
+### Combine
+Corsi_EoH <- rbind(CB_ACC, CB_SPAN)
+
+```
+
+```{r plots, echo = F}
+
+### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###
+### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###### Flanker ###
+# Regular first 
+Flanker_EoH %>% filter(Condition != "FT_NIH") %>%
+  mutate(Condition = factor(Condition, levels = c("FT_all", "FT_incongruent", "FT_congruent"),
+                            labels = c("All", "Incongruent", "Congruent"))) %>%
+  ggplot(aes(x = Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  facet_wrap(~ Condition, nrow = 1) +
+  labs(title = "Flanker: Split-Half",
+       x= "Flanker Condition", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"), strip.text = element_text(face = "bold", size = 12))
+
+# Then NIH Score
+Flanker_EoH %>% filter(Condition == "FT_NIH") %>%
+  mutate(Measure = factor(Measure, levels = c("NIH_RT", "NIH_ACC", "NIH_ALL"),
+                            labels = c("NIH RT", "NIH Accuracy", "NIH Total"))) %>%
+  ggplot(aes(x =Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  # facet_wrap(~ Condition, nrow = 1, strip.position = "top") +
+  labs(title = "Flanker: Split-Half (NIH)",
+       x= "NIH Examiner Score", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 30, hjust = 1,face = "bold"), strip.text = element_text(face = "bold", size = 12))
+
+### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###
+### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###
+### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###### Rule Switch ###
+# Non-NIH first
+RuleSwitch_EoH %>% filter(!grepl("NIH", Measure)) %>%
+  mutate(Condition = factor(Condition, levels = c("RS_Single", "RS_Mixed", "RS_Mixed_NoSwitch", "RS_Mixed_Switch"),
+                            labels = c("Single", "Mixed\n(all)", "Mixed\n(no-switch)","Mixed\n(switch)"))) %>%
+  ggplot(aes(x = Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  facet_wrap(~ Condition, nrow = 1) +
+  labs(title = "Rule Switch: Split-Half",
+       x= "Rule Switch Condition", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1,face = "bold"), strip.text = element_text(face = "bold", size = 12))
+
+# Then NIH Score
+RuleSwitch_EoH %>% filter(grepl("NIH", Measure)) %>%
+  mutate(Measure = factor(Measure, levels = c("NIH_RT", "NIH_ACC", "NIH_TOTAL"),
+                            labels = c("NIH RT", "NIH Accuracy", "NIH Total")),
+         Condition = factor(Condition, levels = c("NIH_Mixed", "NIH_single"),
+                            labels = c("Mixed", "Single"))) %>%
+  ggplot(aes(x =Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  facet_wrap(~ Condition, nrow = 1, strip.position = "top") +
+  labs(title = "Rule Switch: Split-Half (NIH)",
+       x= "NIH Examiner Score", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1,face = "bold"), strip.text = element_text(face = "bold", size = 12))
+
+### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###
+### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###
+### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###### Math Fluency ###
+# Regular first 
+MathFluency_EoH %>% 
+  mutate(Measure = factor(Measure, levels = c("ACC", "Ntrials"),
+                            labels = c("Accuracy", "N-trials"))) %>%
+  ggplot(aes(x = Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  # facet_wrap(~ Measure, nrow = 1) +
+  labs(title = "Math Fluency: Split-Half",
+       x= "", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"), strip.text = element_text(face = "bold", size = 12))
+
+### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###
+### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###
+### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###### PASAT ###
+PASAT_EoH %>% 
+  mutate(Measure = factor(Measure, levels = c("Accuracy", "NIH_RT", "NIH_ACC", "NIH_TOTAL"),
+                            labels = c("Accuracy", "NIH RT", "NIH Accuracy", "NIH Total"))) %>%
+  ggplot(aes(x = Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  # facet_wrap(~ Measure, nrow = 1) +
+  labs(title = "Math Fluency: Split-Half",
+       x= "", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"), strip.text = element_text(face = "bold", size = 12))
+
+### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### 
+### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### 
+### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### Corsi ###### 
+Corsi_EoH %>%
+  ggplot(aes(x = Measure, y = Correlation, fill = Session)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  scale_y_continuous(breaks = seq(0,1,.2), limits = c(0,1)) +
+  # facet_wrap(~ Measure, nrow = 1) +
+  labs(title = "Simple Corsi: Split-Half",
+       x= "", y = "Reliability (r)",
+       fill = "Session") +
+  scale_fill_manual(values = c("Pre" = "#cf306c", "Post" = "#30c1cf")) +
+  theme_classic(base_size = 20) +
+  theme(panel.grid.major.x= element_blank(), panel.grid.minor= element_blank(),
+    axis.text.x = element_text(angle = 30, hjust = 1, face = "bold"), strip.text = element_text(face = "bold", size = 12))
+  
+  
+
+```
+
+
